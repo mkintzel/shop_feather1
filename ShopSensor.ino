@@ -7,6 +7,7 @@
 //#include <Wire.h>
 #include <SPI.h>
 #include <RH_RF69.h>
+#include <RHReliableDatagram.h>
 #include <Adafruit_BMP280.h>
 #include <Adafruit_MCP9808.h>
 
@@ -14,6 +15,11 @@
 
 // Change to 434.0 or other frequency, must match RX's freq!
 #define RF69_FREQ 915.0
+
+// Where to send packets to!
+#define DEST_ADDRESS   7
+// change addresses for each client board, any number :)
+#define MY_ADDRESS     5
 
 //#if defined (__AVR_ATmega32U4__) // Feather 32u4 w/Radio
   #define RFM69_CS      8
@@ -25,6 +31,9 @@
 // Singleton instance of the radio driver
 RH_RF69 rf69(RFM69_CS, RFM69_INT);
 
+// Class to manage message delivery and receipt, using the driver declared above
+RHReliableDatagram rf69_manager(rf69, MY_ADDRESS);
+
 // Setup from the Sensor Code
 #define BMP_SCK  (13)
 
@@ -35,10 +44,10 @@ Adafruit_BMP280 bmp; // I2C
 Adafruit_MCP9808 tempsensor = Adafruit_MCP9808();
 
 // constants won't change. They're used here to set pin numbrers:
-//const int iButtonPin = 12;    // the number of the pushbutton pin
-//const int ledPin =  13;      // the number of the LED pin - defined above
+const int iButtonPin = 12;    // the number of the pushbutton pin
+const int ledPin =  13;      // the number of the LED pin - defined above
 const int iTempCheck = 5000;    // 5 seconds
-const int iTXcheck = 5000;
+const int iTXcheck = 30000;
 const int iLoopspeed = 1000;    // 1 seconds
 
 // variables will change:
@@ -52,7 +61,8 @@ String sRadioMsg;
 void setup()
 {
   Serial.begin(115200);
-
+  delay(5000);
+  
   // initialize the LED pin as an output:
   pinMode(LED, OUTPUT);
   // initialize the pushbutton pin as an input:
@@ -71,7 +81,7 @@ void setup()
   digitalWrite(RFM69_RST, LOW);
   delay(10);
 
-  if (!rf69.init()) {
+  if (!rf69_manager.init()) {
     Serial.println("RFM69 radio init failed");
     while (1);
   }
@@ -85,7 +95,7 @@ void setup()
 
   // If you are using a high power RF69 eg RFM69HW, you *must* set a Tx power with the
   // ishighpowermodule flag set like this:
-  rf69.setTxPower(14, true);  // range from 14-20 for power, 2nd arg must be true for 69HCW
+  rf69.setTxPower(20, true);  // range from 14-20 for power, 2nd arg must be true for 69HCW
 
   // The encryption key has to be the same as the one in the server
   uint8_t key[] = { 0x00, 0x06, 0x01, 0x08, 0x01, 0x09, 0x07, 0x00,
@@ -105,6 +115,9 @@ void setup()
 }
 
 
+// Dont put this on the stack:
+uint8_t buf[RH_RF69_MAX_MESSAGE_LEN];
+uint8_t data[] = "  OK";
 
 void loop() {
   float fDegC;       // temperature in C
@@ -143,7 +156,7 @@ void loop() {
     fBackDegC = tempsensor.readTempC();
 
     // Print out the results
-    print_values(fDegC, fInHg, fBackDegC);
+//    print_values(fDegC, fInHg, fBackDegC);
   }
 
   if (iTXcntrl >= iTXcheck) {
@@ -156,26 +169,13 @@ void loop() {
     Serial.print("Sending: "); Serial.println(sRadioMsg);
     
     // Send a message!
-    uint8_t data[25];
-    sRadioMsg.toCharArray(data, sRadioMsg.length());
-    rf69.send(data, strlen(data));
-    rf69.waitPacketSent();
+    uint8_t radiopacket[25];
+    sRadioMsg.toCharArray(radiopacket, sRadioMsg.length());
 
-    // Now wait for a reply
-    uint8_t buf[RH_RF69_MAX_MESSAGE_LEN];
-    uint8_t len = sizeof(buf);
-
-    if (rf69.waitAvailableTimeout(500))  {
-      // Should be a reply message for us now
-      if (rf69.recv(buf, &len)) {
-        Serial.print("Got a reply: ");
-        Serial.println((char*)buf);
-        Blink(LED, 50, 3); //blink LED 3 times, 50ms between blinks
-      } else {
-        Serial.println("Receive failed");
-      }
+    if (rf69_manager.sendtoWait(radiopacket, strlen(radiopacket), DEST_ADDRESS)) {
+        Serial.println(" --> Successful Send!");
     } else {
-      Serial.println("No reply, is another RFM69 listening?");
+      Serial.println("Sending failed (no ack)");
     }
   }
 
